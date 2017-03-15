@@ -1,5 +1,5 @@
-// julio enables to use PostgreSQL as storage for a simple JSON based event
-// sourcing.
+// Package julio enables to use PostgreSQL as storage for a simple JSON based
+// event sourcing.
 package julio
 
 import (
