@@ -1,3 +1,5 @@
+// julio enables to use PostgreSQL as storage for a simple JSON based event
+// sourcing.
 package julio
 
 import (
@@ -15,17 +17,14 @@ var psql = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
 const prefix = "julio_notify"
 
-type Filter struct {
-	Sqlizer squirrel.Sqlizer
-	Offset  uint64
-	Updates bool
-}
-
+// Julio wraps a PostgreSQL database connection to be used for event
+// sourcing. The underlying connection is exposed as DB.
 type Julio struct {
 	DB         *sql.DB
 	dataSource string
 }
 
+// Open opens a new database connection.
 func Open(dataSource string) (*Julio, error) {
 	db, err := sql.Open("postgres", dataSource)
 	if err != nil {
@@ -38,6 +37,9 @@ func Open(dataSource string) (*Julio, error) {
 	}, err
 }
 
+// Init initializes a table for event sourcing. It is safe to call
+// init for allready initialized tables, but not for existing tables
+// with a different structure.
 func (j *Julio) Init(table string) error {
 	query := `
 		CREATE OR REPLACE FUNCTION <PREFIX>_<TABLE>() RETURNS TRIGGER AS $$
@@ -71,6 +73,8 @@ func (j *Julio) Init(table string) error {
 	return nil
 }
 
+// Add adds a new event entry to the given table. The payload v is
+// json serialized in the database.
 func (j *Julio) Add(table string, v interface{}) (int, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -92,6 +96,8 @@ func (j *Julio) Add(table string, v interface{}) (int, error) {
 	return id, err
 }
 
+// Get fetches all events from table that match the given filter. It
+// optionally listes for new events as well.
 func (j *Julio) Get(table string, filter Filter) *Rows {
 	rows := &Rows{
 		C:       make(chan Row, 1024),
@@ -108,11 +114,23 @@ func (j *Julio) Get(table string, filter Filter) *Rows {
 	return rows
 }
 
+// Filter defines the SQL where predicate to filter existing and new
+// rows alike.
+type Filter struct {
+	Sqlizer squirrel.Sqlizer
+	Offset  uint64
+	Updates bool
+}
+
+// Row is a single row or event in the database
 type Row struct {
 	ID   int
 	Data json.RawMessage
 }
 
+// Rows is a collection of rows in the database. Both existing and
+// new events can be retrieved via the attribute C. If you no longer
+// are interested in events close it.
 type Rows struct {
 	C   chan Row
 	Err error
@@ -254,6 +272,7 @@ func (r *Rows) selectloop() {
 	}
 }
 
+// Close closes this notify subscription.
 func (r *Rows) Close() {
 	defer func() { recover() }()
 	close(r.done)
