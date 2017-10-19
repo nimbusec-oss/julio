@@ -120,6 +120,7 @@ type Filter struct {
 	Sqlizer squirrel.Sqlizer
 	Offset  uint64
 	Updates bool
+	OnlyNew bool // subscribe only to new events, skip the "historic"
 }
 
 // Row is a single row or event in the database
@@ -147,10 +148,6 @@ func (r *Rows) notifyloop() {
 	if !r.filter.Updates {
 		return
 	}
-
-	// goroutine leak debug logs
-	// log.Printf("notify loop started: %p", r)
-	// defer log.Printf("notify loop closed: %p", r)
 
 	listener := pq.NewListener(r.julio.dataSource,
 		10*time.Second,
@@ -223,11 +220,20 @@ func (r *Rows) notifyloop() {
 }
 
 func (r *Rows) selectloop() {
-	// goroutine leak debug logs
-	// log.Printf("select loop started: %p", r)
-	// defer log.Printf("select loop closed: %p", r)
-
 	defer close(r.C)
+
+	r.query()
+	for row := range r.backlog {
+		r.C <- row
+	}
+}
+
+func (r *Rows) query() {
+	if r.filter.OnlyNew {
+		// skip querying if we are only interested in new events
+		return
+	}
+
 	query, args, err := psql.
 		Select("id", "data").
 		From(r.table).
@@ -265,10 +271,6 @@ func (r *Rows) selectloop() {
 	if rows.Err() != nil {
 		r.Err = rows.Err()
 		return
-	}
-
-	for row := range r.backlog {
-		r.C <- row
 	}
 }
 
