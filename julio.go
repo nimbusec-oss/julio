@@ -238,7 +238,7 @@ func (r *Rows) query() {
 		Select("id", "data").
 		From(r.table).
 		Where(r.filter.Sqlizer).
-		Offset(r.filter.Offset).
+		Where(squirrel.Gt{"id": r.filter.Offset}).
 		OrderBy("id").
 		ToSql()
 	if err != nil {
