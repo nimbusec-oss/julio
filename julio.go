@@ -118,9 +118,9 @@ func (j *Julio) Get(table string, filter Filter) *Rows {
 // rows alike.
 type Filter struct {
 	Sqlizer squirrel.Sqlizer
-	Offset  uint64
 	Updates bool
 	OnlyNew bool // subscribe only to new events, skip the "historic"
+	StartAt uint64
 }
 
 // Row is a single row or event in the database
@@ -238,7 +238,7 @@ func (r *Rows) query() {
 		Select("id", "data").
 		From(r.table).
 		Where(r.filter.Sqlizer).
-		Where(squirrel.Gt{"id": r.filter.Offset}).
+		Where(squirrel.GtOrEq{"id": r.filter.StartAt}).
 		OrderBy("id").
 		ToSql()
 	if err != nil {
