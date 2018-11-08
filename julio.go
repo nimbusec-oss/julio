@@ -30,11 +30,15 @@ func Open(dataSource string) (*Julio, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = db.Ping()
+	if err != nil {
+		return nil, err
+	}
 
 	return &Julio{
 		DB:         db,
 		dataSource: dataSource,
-	}, err
+	}, nil
 }
 
 // Init initializes a table for event sourcing. It is safe to call
