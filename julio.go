@@ -170,6 +170,10 @@ func (r *Rows) notifyloop() {
 			return
 
 		case n := <-listener.Notify:
+			if n == nil {
+				continue // if connection was lost, skip.
+			}
+
 			id, err := strconv.Atoi(n.Extra)
 			if err != nil {
 				r.Err = err
