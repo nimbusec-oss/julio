@@ -16,6 +16,7 @@ import (
 var psql = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
 const prefix = "julio_notify"
+const fetchLimit = 10000
 
 // Julio wraps a PostgreSQL database connection to be used for event
 // sourcing. The underlying connection is exposed as DB.
@@ -242,43 +243,56 @@ func (r *Rows) query() {
 		return
 	}
 
-	query, args, err := psql.
+	query := psql.
 		Select("id", "data").
 		From(r.table).
 		Where(r.filter.Sqlizer).
-		Where(squirrel.GtOrEq{"id": r.filter.StartAt}).
-		OrderBy("id").
-		ToSql()
-	if err != nil {
-		r.Err = err
-		return
-	}
+		OrderBy("id")
 
-	rows, err := r.julio.DB.Query(query, args...)
-	if err != nil {
-		r.Err = err
-		return
-	}
+	r.paginate(query, r.filter.StartAt, fetchLimit)
+}
 
-	for rows.Next() {
-		row := Row{}
-		err := rows.Scan(&row.ID, &row.Data)
+func (r *Rows) paginate(q squirrel.SelectBuilder, startAt uint64, limit uint64) {
+	for {
+		query, args, err := q.
+			Where(squirrel.GtOrEq{"id": startAt}).
+			Limit(limit).ToSql()
 		if err != nil {
 			r.Err = err
 			return
 		}
 
-		select {
-		case r.C <- row:
-		case <-r.done:
+		rows, err := r.julio.DB.Query(query, args...)
+		if err != nil {
+			r.Err = err
 			return
 		}
-	}
 
-	rows.Close()
-	if rows.Err() != nil {
-		r.Err = rows.Err()
-		return
+		rowsEmpty := true
+		for rows.Next() {
+			rowsEmpty = false
+
+			row := Row{}
+			err := rows.Scan(&row.ID, &row.Data)
+			if err != nil {
+				r.Err = err
+				return
+			}
+			startAt = uint64(row.ID) + 1
+
+			select {
+			case r.C <- row:
+			case <-r.done:
+				return
+			}
+		}
+		if rowsEmpty {
+			return // pagination finished
+		}
+		if err := rows.Err(); err != nil {
+			r.Err = err
+			return
+		}
 	}
 }
 
