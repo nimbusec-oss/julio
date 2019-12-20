@@ -243,20 +243,38 @@ func (r *Rows) query() {
 		return
 	}
 
+	q, args, err := psql.
+		Select("MAX(id)").
+		From(r.table).
+		Where(r.filter.Sqlizer).ToSql()
+	if err != nil {
+		r.Err = err
+		return
+	}
+
+	var latestIdx uint64
+	err = r.julio.DB.QueryRow(q, args...).Scan(&latestIdx)
+	if err != nil {
+		r.Err = err
+		return
+	}
+
 	query := psql.
 		Select("id", "data").
 		From(r.table).
 		Where(r.filter.Sqlizer).
 		OrderBy("id")
 
-	r.paginate(query, r.filter.StartAt, fetchLimit)
+	r.paginate(query, r.filter.StartAt, latestIdx)
 }
 
-func (r *Rows) paginate(q squirrel.SelectBuilder, startAt uint64, limit uint64) {
+func (r *Rows) paginate(q squirrel.SelectBuilder, startAt uint64, latestIndex uint64) {
 	for {
+		stopBefore := startAt + fetchLimit
 		query, args, err := q.
 			Where(squirrel.GtOrEq{"id": startAt}).
-			Limit(limit).ToSql()
+			Where(squirrel.Lt{"id": stopBefore}).
+			ToSql()
 		if err != nil {
 			r.Err = err
 			return
@@ -268,17 +286,13 @@ func (r *Rows) paginate(q squirrel.SelectBuilder, startAt uint64, limit uint64) 
 			return
 		}
 
-		rowsEmpty := true
 		for rows.Next() {
-			rowsEmpty = false
-
 			row := Row{}
 			err := rows.Scan(&row.ID, &row.Data)
 			if err != nil {
 				r.Err = err
 				return
 			}
-			startAt = uint64(row.ID) + 1
 
 			select {
 			case r.C <- row:
@@ -286,13 +300,15 @@ func (r *Rows) paginate(q squirrel.SelectBuilder, startAt uint64, limit uint64) 
 				return
 			}
 		}
-		if rowsEmpty {
+		if stopBefore > latestIndex {
 			return // pagination finished
 		}
 		if err := rows.Err(); err != nil {
 			r.Err = err
 			return
 		}
+
+		startAt = stopBefore
 	}
 }
 
