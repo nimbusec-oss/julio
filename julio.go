@@ -270,10 +270,9 @@ func (r *Rows) paginate(q squirrel.SelectBuilder, startAt uint64) {
 
 	for {
 		stopBefore := startAt + fetchLimit
-		q = q.Where(squirrel.GtOrEq{"id": startAt}).
-			Where(squirrel.Lt{"id": stopBefore})
 
-		r.query(q)
+		r.query(q.Where(squirrel.GtOrEq{"id": startAt}).
+			Where(squirrel.Lt{"id": stopBefore}))
 
 		if stopBefore > latestIdx {
 			return // pagination finished
