@@ -122,10 +122,11 @@ func (j *Julio) Get(table string, filter Filter) *Rows {
 // Filter defines the SQL where predicate to filter existing and new
 // rows alike.
 type Filter struct {
-	Sqlizer squirrel.Sqlizer
-	Updates bool
-	OnlyNew bool // subscribe only to new events, skip the "historic"
-	StartAt uint64
+	Sqlizer  squirrel.Sqlizer
+	Updates  bool
+	OnlyNew  bool // subscribe only to new events, skip the "historic"
+	Paginate bool // will increase performance on big queries, but is slow on small queries
+	StartAt  uint64
 }
 
 // Row is a single row or event in the database
@@ -231,19 +232,27 @@ func (r *Rows) notifyloop() {
 func (r *Rows) selectloop() {
 	defer close(r.C)
 
-	r.query()
+	if !r.filter.OnlyNew {
+		// query if we are interested in old events
+		q := psql.
+			Select("id", "data").
+			From(r.table).
+			Where(r.filter.Sqlizer).
+			OrderBy("id")
+
+		if r.filter.Paginate {
+			r.paginate(q, r.filter.StartAt)
+		} else {
+			r.query(q.Where(squirrel.GtOrEq{"id": r.filter.StartAt}))
+		}
+	}
 	for row := range r.backlog {
 		r.C <- row
 	}
 }
 
-func (r *Rows) query() {
-	if r.filter.OnlyNew {
-		// skip querying if we are only interested in new events
-		return
-	}
-
-	q, args, err := psql.
+func (r *Rows) paginate(q squirrel.SelectBuilder, startAt uint64) {
+	latestIdxQuery, args, err := psql.
 		Select("MAX(id)").
 		From(r.table).
 		Where(r.filter.Sqlizer).ToSql()
@@ -253,62 +262,56 @@ func (r *Rows) query() {
 	}
 
 	var latestIdx uint64
-	err = r.julio.DB.QueryRow(q, args...).Scan(&latestIdx)
+	err = r.julio.DB.QueryRow(latestIdxQuery, args...).Scan(&latestIdx)
 	if err != nil {
 		r.Err = err
 		return
 	}
 
-	query := psql.
-		Select("id", "data").
-		From(r.table).
-		Where(r.filter.Sqlizer).
-		OrderBy("id")
-
-	r.paginate(query, r.filter.StartAt, latestIdx)
-}
-
-func (r *Rows) paginate(q squirrel.SelectBuilder, startAt uint64, latestIndex uint64) {
 	for {
 		stopBefore := startAt + fetchLimit
-		query, args, err := q.
-			Where(squirrel.GtOrEq{"id": startAt}).
-			Where(squirrel.Lt{"id": stopBefore}).
-			ToSql()
-		if err != nil {
-			r.Err = err
-			return
-		}
+		q = q.Where(squirrel.GtOrEq{"id": startAt}).
+			Where(squirrel.Lt{"id": stopBefore})
 
-		rows, err := r.julio.DB.Query(query, args...)
-		if err != nil {
-			r.Err = err
-			return
-		}
+		r.query(q)
 
-		for rows.Next() {
-			row := Row{}
-			err := rows.Scan(&row.ID, &row.Data)
-			if err != nil {
-				r.Err = err
-				return
-			}
-
-			select {
-			case r.C <- row:
-			case <-r.done:
-				return
-			}
-		}
-		if stopBefore > latestIndex {
+		if stopBefore > latestIdx {
 			return // pagination finished
 		}
-		if err := rows.Err(); err != nil {
+		startAt = stopBefore
+	}
+}
+
+func (r *Rows) query(q squirrel.SelectBuilder) {
+	query, args, err := q.ToSql()
+	if err != nil {
+		r.Err = err
+		return
+	}
+
+	rows, err := r.julio.DB.Query(query, args...)
+	if err != nil {
+		r.Err = err
+		return
+	}
+
+	for rows.Next() {
+		row := Row{}
+		err := rows.Scan(&row.ID, &row.Data)
+		if err != nil {
 			r.Err = err
 			return
 		}
 
-		startAt = stopBefore
+		select {
+		case r.C <- row:
+		case <-r.done:
+			return
+		}
+	}
+	if err := rows.Err(); err != nil {
+		r.Err = err
+		return
 	}
 }
 
