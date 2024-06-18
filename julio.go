@@ -26,11 +26,12 @@ type Julio struct {
 }
 
 // Open opens a new database connection.
-func Open(dataSource string) (*Julio, error) {
+func Open(dataSource string, maxConns int) (*Julio, error) {
 	db, err := sql.Open("postgres", dataSource)
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(maxConns)
 	err = db.Ping()
 	if err != nil {
 		return nil, err
